@@ -1,49 +1,52 @@
-# LibWake (Unraid)
+# LibWake
 
-A modern Wake-on-LAN → VM start daemon + Unraid plugin.
+LibWake lets you **start Unraid VMs using Wake-on-LAN (WOL)**.  
+Send a WOL magic packet to a VM’s MAC address and LibWake will start that VM via libvirt.
 
-This project aims to combine the **clean VM-integrated UX** of the older unRAID-libvirtwol plugin
-with the **clean, portable daemon approach** of virtwold, updated for modern Unraid.
+## Features
 
-## What it does
+- Listens for WOL magic packets (UDP ports **7/9** by default)
+- Supports “Ethernet WOL” frames (EtherType **0x0842**)
+- Starts VMs by matching the **target MAC** to a VM NIC MAC
+- Per‑VM allow list in the Unraid WebGUI
 
-- Listens for WOL magic packets (UDP ports 7/9 by default)
-- Optionally listens for the EtherType `0x0842` “Ethernet” style WOL frame
-- Matches the target MAC to a VM's NIC MAC address
-- Starts the VM via `virsh start <vm>` (if it isn't already running)
-- Lets you enable/disable WOL on a per-VM basis in the Unraid WebGUI (initially via a settings page)
+## Requirements
 
-## Install (developer preview)
+- Unraid **7.x** with **VM Manager** enabled
+- Your WOL sender must be on the same LAN (or routed correctly) and able to reach the Unraid host
 
-1. Publish this repo to GitHub.
-2. Create a release that includes a Linux amd64 binary named:
-   - `libwake-linux-amd64`
-3. In Unraid, go to **Plugins → Install Plugin** and paste the raw URL to:
-   - `plugin/libwake.plg`
+## Install on Unraid
 
-> The `.plg` file contains placeholders (repo path, version). Adjust entities at the top of
-> `plugin/libwake.plg` to match your GitHub repo.
+1. Unraid WebGUI → **Plugins** → **Install Plugin**
+2. Paste this URL and click **Install**:
+
+```text
+https://raw.githubusercontent.com/MiranoVerhoef/LibWake/main/plugin/libwake.plg
+```
+
+Releases (binaries) are published here:
+
+```text
+https://github.com/MiranoVerhoef/LibWake/releases
+```
 
 ## Configure
 
-After install:
+Unraid WebGUI → **Settings** → **VM Manager** → **LibWake**
 
-- Settings → VM Manager → LibWake
-- Enable the daemon
-- Choose the interface (usually `br0`)
-- Select which VMs may be started
+- **Enable daemon**
+- Set **Listen interface** (usually `br0`)
+- (Optional) Set **Allow subnets** (comma-separated CIDRs)
+- Select which **VMs** may be started by WOL packets
 
-## Files
+## Usage
 
-- Go daemon: `cmd/libwake`
-- Unraid plugin artifacts: `plugin/`
+Send a Wake-on-LAN magic packet to the MAC address of the VM you enabled in LibWake.
 
-## Roadmap
+## Logs & troubleshooting
 
-- Inject per-VM toggle directly into the VM edit page (“Advanced view”) like the classic plugin
-- Auto-reload mappings without restart
-- GitHub Actions: build binary + publish release assets
+- Log file:
+  - `/var/log/libwake/libwake.log`
 
-## License
-
-MIT
+- Service status:
+  - ` /etc/rc.d/rc.libwake status `
