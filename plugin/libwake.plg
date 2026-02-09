@@ -3,37 +3,82 @@
   <!ENTITY slug "libwake">
   <!ENTITY name "LibWake">
   <!ENTITY author "Verhoef">
-  <!ENTITY version "0.1.2">
+  <!ENTITY version "0.1.3">
   <!ENTITY github "MiranoVerhoef/LibWake">
   <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
   <!ENTITY rawURL "https://raw.githubusercontent.com/&github;/main/plugin">
-  <!ENTITY binURL "https://github.com/&github;/releases/download/v0.1.2/&slug;-linux-amd64">
 ]>
 
-<PLUGIN name="&name;" author="&author;" version="0.1.2" pluginURL="&plgURL;" min="7.0.0">
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plgURL;" min="7.0.0">
 
   <CHANGES>
 <![CDATA[
-### 0.1.1
-- Fix: Settings page file name casing (ensures LibWake icon/page shows in Unraid)
-- Docs: clarify where to find LibWake in Settings
-
-### 0.1.2
-- Fix: build failure in EtherType listener (sockaddr to net.Addr conversion)
-- CI: disable Go cache step that requires go.sum
+### 0.1.3
+- Fix: plugin install no longer fails when the release binary is missing
+- Fix: service only starts when ENABLED="yes"
+- CI: add go.sum (empty) to avoid Go cache warnings
 ]]>
   </CHANGES>
 
-  <FILE Name="/usr/local/sbin/&slug;" Mode="0755">&binURL;</FILE>
   <FILE Name="/etc/rc.d/rc.&slug;" Mode="0755">&rawURL;/scripts/rc.&slug;</FILE>
   <FILE Name="/usr/local/emhttp/plugins/&slug;/LibWake.page" Mode="0644">&rawURL;/web/LibWake.page</FILE>
 
   <SCRIPT>
 <![CDATA[
+set -u
+
 # Ensure persistent config directory exists
 mkdir -p /boot/config/plugins/&slug;
-# Start service (will create a default config with ENABLED="no" if missing)
-/etc/rc.d/rc.&slug; start
+
+# Try to download the binary from GitHub Releases.
+# This keeps installs working even if the release asset isn't present yet.
+BIN="/usr/local/sbin/&slug;"
+TMP="${BIN}.new"
+
+fetch() {
+  local url="$1"
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$TMP" "$url" || return 1
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$TMP" || return 1
+  else
+    return 1
+  fi
+  [[ -s "$TMP" ]]
+}
+
+TAG1="v&version;"
+TAG2="V&version;"
+URL1="https://github.com/&github;/releases/download/${TAG1}/&slug;-linux-amd64"
+URL2="https://github.com/&github;/releases/download/${TAG2}/&slug;-linux-amd64"
+URL3="https://github.com/&github;/releases/latest/download/&slug;-linux-amd64"
+
+mkdir -p "$(dirname "$BIN")"
+
+if fetch "$URL1" || fetch "$URL2" || fetch "$URL3"; then
+  mv -f "$TMP" "$BIN"
+  chmod 0755 "$BIN"
+  echo "&name;: installed binary to $BIN"
+else
+  rm -f "$TMP" 2>/dev/null || true
+  echo "&name;: NOTE - release binary not downloaded yet."
+  echo "&name;: If this is a new repo, create a GitHub Release for tag ${TAG1} (or run the Release workflow) to upload &slug;-linux-amd64."
+fi
+
+# Create default config if missing (ENABLED=no)
+CFG="/boot/config/plugins/&slug;/&slug;.cfg"
+if [[ ! -f "$CFG" ]]; then
+  cat > "$CFG" <<'CFGEOF'
+# libwake settings
+ENABLED="no"
+INTERFACE="br0"
+UDP_PORTS="7,9"
+# ALLOW_SUBNETS="192.168.1.0/24,10.0.0.0/8"
+DEBOUNCE_SECONDS="10"
+CFGEOF
+fi
+
+# Do not auto-start on install. Enable it in Settings → VM Manager → LibWake.
 ]]>
   </SCRIPT>
 

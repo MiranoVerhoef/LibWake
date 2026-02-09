@@ -8,18 +8,7 @@ PID="/var/run/${NAME}.pid"
 LOGDIR="/var/log/${NAME}"
 LOGFILE="${LOGDIR}/${NAME}.log"
 
-start() {
-  mkdir -p "${LOGDIR}"
-  if [[ ! -x "${BIN}" ]]; then
-    echo "${NAME}: binary not found at ${BIN}" >&2
-    exit 1
-  fi
-  if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}")" 2>/dev/null; then
-    echo "${NAME}: already running (pid $(cat "${PID}"))"
-    exit 0
-  fi
-
-  # If no config exists yet, create a safe default.
+ensure_cfg() {
   if [[ ! -f "${CFG}" ]]; then
     mkdir -p "$(dirname "${CFG}")"
     cat > "${CFG}" <<'CFGEOF'
@@ -32,6 +21,33 @@ UDP_PORTS="7,9"
 # ALLOW_SUBNETS="192.168.1.0/24,10.0.0.0/8"
 DEBOUNCE_SECONDS="10"
 CFGEOF
+  fi
+}
+
+is_enabled() {
+  ensure_cfg
+  # shellcheck disable=SC1090
+  source "${CFG}" >/dev/null 2>&1 || true
+  [[ "${ENABLED:-no}" == "yes" ]]
+}
+
+start() {
+  mkdir -p "${LOGDIR}"
+  ensure_cfg
+
+  if ! is_enabled; then
+    echo "${NAME}: disabled (ENABLED=no)"
+    exit 0
+  fi
+
+  if [[ ! -x "${BIN}" ]]; then
+    echo "${NAME}: binary not found at ${BIN}" >&2
+    exit 1
+  fi
+
+  if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}")" 2>/dev/null; then
+    echo "${NAME}: already running (pid $(cat "${PID}"))"
+    exit 0
   fi
 
   echo "${NAME}: starting"
@@ -59,8 +75,13 @@ status() {
   if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}")" 2>/dev/null; then
     echo "${NAME}: running (pid $(cat "${PID}"))"
   else
-    echo "${NAME}: stopped"
-    exit 1
+    if is_enabled; then
+      echo "${NAME}: enabled but not running" >&2
+      exit 1
+    else
+      echo "${NAME}: disabled"
+      exit 0
+    fi
   fi
 }
 
