@@ -3,7 +3,7 @@
   <!ENTITY slug "libwake">
   <!ENTITY name "LibWake">
   <!ENTITY author "Verhoef">
-  <!ENTITY version "0.2.0">
+  <!ENTITY version "0.2.1">
   <!ENTITY github "MiranoVerhoef/LibWake">
   <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
 ]>
@@ -12,7 +12,7 @@
 
   <CHANGES>
 <![CDATA[
-### 0.2.0
+### 0.2.1
 - UI: LibWake appears under **Settings → User Utilities** (Menu="Utilities") and the plugin entry opens the same page.
 - UI: Added LibWake logo/icon.
 - Install: Uses install-time file creation (no <FILE> entries) to avoid chmod failures.
@@ -22,33 +22,34 @@
   <INSTALL>
 <![CDATA[
 #!/bin/bash
-set -e
+set -u
 
 SLUG="libwake"
 echo "Installing ${SLUG}..."
 
-install -d -m 0755 /usr/local/emhttp/plugins/${SLUG}
-install -d -m 0755 /usr/local/emhttp/plugins/${SLUG}/scripts
-install -d -m 0755 /usr/local/emhttp/plugins/${SLUG}/include
-install -d -m 0755 /usr/local/emhttp/plugins/${SLUG}/images
-install -d -m 0755 /boot/config/plugins/${SLUG}
+# Create plugin directories (keep going even if something already exists)
+mkdir -p /usr/local/emhttp/plugins/${SLUG} || true
+mkdir -p /usr/local/emhttp/plugins/${SLUG}/{scripts,include,images,web,event} || true
+mkdir -p /boot/config/plugins/${SLUG} || true
 
-# Seed icon to flash if not present (persist across reboot)
-if [[ ! -f "/boot/config/plugins/${SLUG}/${SLUG}.png" ]]; then
-  # Download from repo (icon is stored next to this plg)
+# Icon: persist on flash; copy to runtime
+ICON_FLASH="/boot/config/plugins/${SLUG}/${SLUG}.png"
+ICON_RUN="/usr/local/emhttp/plugins/${SLUG}/images/${SLUG}.png"
+if [[ ! -f "${ICON_FLASH}" ]]; then
   ICON_URL="https://raw.githubusercontent.com/MiranoVerhoef/LibWake/main/plugin/${SLUG}.png"
-  wget -qO "/boot/config/plugins/${SLUG}/${SLUG}.png" "${ICON_URL}" || true
+  wget -qO "${ICON_FLASH}" "${ICON_URL}" || true
 fi
-if [[ -f "/boot/config/plugins/${SLUG}/${SLUG}.png" ]]; then
-  cp -f "/boot/config/plugins/${SLUG}/${SLUG}.png" "/usr/local/emhttp/plugins/${SLUG}/images/${SLUG}.png"
+if [[ -f "${ICON_FLASH}" ]]; then
+  cp -f "${ICON_FLASH}" "${ICON_RUN}" || true
+  chmod 0644 "${ICON_RUN}" || true
 fi
 
-# Install binary (from release asset if available). Non-fatal if missing.
-BIN_URL="https://github.com/MiranoVerhoef/LibWake/releases/download/v0.2.0/libwake-linux-amd64"
+# Binary: try to fetch from release tag (non-fatal if missing)
+BIN_URL="https://github.com/MiranoVerhoef/LibWake/releases/download/v0.2.1/libwake-linux-amd64"
 if wget -qO /usr/local/sbin/libwake "${BIN_URL}"; then
-  chmod 0755 /usr/local/sbin/libwake
+  chmod 0755 /usr/local/sbin/libwake || true
 else
-  echo "Note: binary not downloaded (release asset missing). You can still install the plugin; the daemon will run once the binary is available."
+  echo "Note: binary not downloaded (release asset missing)."
   rm -f /usr/local/sbin/libwake || true
 fi
 
@@ -66,6 +67,7 @@ LOGFILE="${LOGDIR}/${NAME}.log"
 
 load_cfg() {
   if [[ -f "${CFG}" ]]; then
+    # shellcheck disable=SC1090
     source "${CFG}"
   fi
   ENABLED="${ENABLED:-no}"
@@ -78,7 +80,6 @@ start_daemon() {
   load_cfg
   [[ "${ENABLED}" == "yes" ]] || { echo "${NAME}: disabled"; return 0; }
   [[ -x "${BIN}" ]] || { echo "${NAME}: binary missing at ${BIN}"; return 1; }
-
   mkdir -p "${LOGDIR}"
   nohup "${BIN}" --iface "${IFACE}" --udp-ports "${UDP_PORTS}" ${ALLOW_SUBNETS:+--allow-subnets "${ALLOW_SUBNETS}"} >> "${LOGFILE}" 2>&1 &
   echo $! > "${PID}"
@@ -107,11 +108,11 @@ case "${1:-}" in
   *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac
 EOF
-chmod 0755 /etc/rc.d/rc.${SLUG}
-cp -f /etc/rc.d/rc.${SLUG} /usr/local/emhttp/plugins/${SLUG}/scripts/rc.${SLUG}
-chmod 0755 /usr/local/emhttp/plugins/${SLUG}/scripts/rc.${SLUG}
+chmod 0755 /etc/rc.d/rc.${SLUG} || true
+cp -f /etc/rc.d/rc.${SLUG} /usr/local/emhttp/plugins/${SLUG}/scripts/rc.${SLUG} || true
+chmod 0755 /usr/local/emhttp/plugins/${SLUG}/scripts/rc.${SLUG} || true
 
-# Settings page
+# Settings page (Utilities)
 cat > /usr/local/emhttp/plugins/${SLUG}/LibWake.page <<'EOF'
 Menu="Utilities"
 Title="LibWake"
@@ -132,8 +133,8 @@ function write_cfg($cfg, $data) {
   $c = "";
   foreach ($data as $k=>$v) {
     $v = str_replace(["\\","\"], ["\\\\","\\\""], $v);
-    $v = str_replace(""","\\"", $v);
-    $c .= $k.'="'.$v.""\n";
+    $v = str_replace("\"","\\\"", $v);
+    $c .= $k.'="'.$v."\"\n";
   }
   file_put_contents($cfg, $c);
 }
@@ -160,18 +161,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <p><input type="submit" value="Apply" class="button" /></p>
 </form>
 EOF
-chmod 0644 /usr/local/emhttp/plugins/${SLUG}/LibWake.page
-cp -f /usr/local/emhttp/plugins/${SLUG}/LibWake.page /usr/local/emhttp/plugins/${SLUG}/${SLUG}.page
-chmod 0644 /usr/local/emhttp/plugins/${SLUG}/${SLUG}.page
+chmod 0644 /usr/local/emhttp/plugins/${SLUG}/LibWake.page || true
 
-# Some systems cache the Settings menu; restart webGUI to force refresh (non-fatal)
-/usr/local/sbin/emhttpd &>/dev/null || true
+# Also provide the standard plugin page entry
+cp -f /usr/local/emhttp/plugins/${SLUG}/LibWake.page /usr/local/emhttp/plugins/${SLUG}/${SLUG}.page || true
+chmod 0644 /usr/local/emhttp/plugins/${SLUG}/${SLUG}.page || true
 
-echo "LibWake installed. Find it under: Settings → User Utilities → LibWake"
+# Placeholder include for future VM settings integration
+echo "<?php // future hooks ?>" > /usr/local/emhttp/plugins/${SLUG}/include/libwake_vmsettings.php || true
+chmod 0644 /usr/local/emhttp/plugins/${SLUG}/include/libwake_vmsettings.php || true
+
+# Event hooks
+cat > /usr/local/emhttp/plugins/${SLUG}/event/started <<'EOF'
+#!/bin/bash
+/etc/rc.d/rc.libwake start >/dev/null 2>&1 || true
+EOF
+chmod 0755 /usr/local/emhttp/plugins/${SLUG}/event/started || true
+
+cat > /usr/local/emhttp/plugins/${SLUG}/event/stopping <<'EOF'
+#!/bin/bash
+/etc/rc.d/rc.libwake stop >/dev/null 2>&1 || true
+EOF
+chmod 0755 /usr/local/emhttp/plugins/${SLUG}/event/stopping || true
+
+echo "LibWake installed. If it doesn't show immediately, restart WebGUI (Settings → Management Access → Restart WebGUI)."
+echo "Installed files:"
+ls -la /usr/local/emhttp/plugins/${SLUG} || true
 ]]>
   </INSTALL>
 
-  <REMOVE>
+
+<REMOVE>
 <![CDATA[
 #!/bin/bash
 set -e
