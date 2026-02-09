@@ -3,7 +3,7 @@
   <!ENTITY slug "libwake">
   <!ENTITY name "LibWake">
   <!ENTITY author "Verhoef">
-  <!ENTITY version "0.1.4">
+  <!ENTITY version "0.1.5">
   <!ENTITY github "MiranoVerhoef/LibWake">
   <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
   <!ENTITY rawURL "https://raw.githubusercontent.com/&github;/main/plugin">
@@ -13,15 +13,17 @@
 
   <CHANGES>
 <![CDATA[
-### 0.1.4
-- Fix: plugin install no longer fails creating /etc/rc.d/rc.libwake (embedded files; no raw downloads)
+### 0.1.5
+- Fix: install no longer writes directly to /etc/rc.d (avoids chmod failure on some systems)
+- RC script is installed via install(1) during plugin install
 - UI: LibWake settings are injected into **Settings → VM Manager** as a new section (like "Libvirt volume info")
 - Boot: start/stop hooks via Dynamix event scripts (array started/stopping)
 - CI: keep go.sum present to avoid Go cache warnings
 
 ]]>
   </CHANGES>
-  <FILE Name="/etc/rc.d/rc.&slug;" Mode="0755">
+
+  <FILE Name="/usr/local/emhttp/plugins/&slug;/scripts/rc.&slug;" Mode="0755">
 <![CDATA[
 #!/bin/bash
 set -euo pipefail
@@ -160,6 +162,7 @@ case "${1:-}" in
 esac
 ]]>
   </FILE>
+
 
 <FILE Name="/usr/local/emhttp/plugins/&slug;/include/libwake_vmsettings.php" Mode="0644">
 <![CDATA[
@@ -429,6 +432,17 @@ for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
     sed -i -e "/libwake vmsettings hook/d" -e "/libwake_vmsettings\.php/d" "$HOOK_PAGE" 2>/dev/null || true
   fi
 done
+]]>
+  </SCRIPT>
+
+
+  <SCRIPT Name="install">
+<![CDATA[
+
+# Install rc script (avoid plugin manager chmod failure edge-cases)
+mkdir -p /etc/rc.d
+install -m 0755 /usr/local/emhttp/plugins/libwake/scripts/rc.libwake /etc/rc.d/rc.libwake
+
 ]]>
   </SCRIPT>
 
