@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY slug "libwake">
+  <!ENTITY name "LibWake">
+  <!ENTITY author "Verhoef">
+  <!ENTITY version "0.1.0">
+  <!ENTITY github "MiranoVerhoef/LibWake">
+  <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
+  <!ENTITY rawURL "https://raw.githubusercontent.com/&github;/main/plugin">
+  <!ENTITY binURL "https://github.com/&github;/releases/download/v&version;/&slug;-linux-amd64">
+]>
+
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plgURL;" min="7.0.0">
+
+  <CHANGES>
+<![CDATA[
+### &version;
+- Initial public release (Go daemon + basic settings page)
+]]>
+  </CHANGES>
+
+  <FILE Name="/usr/local/sbin/&slug;" Mode="0755">&binURL;</FILE>
+  <FILE Name="/etc/rc.d/rc.&slug;" Mode="0755">&rawURL;/scripts/rc.&slug;</FILE>
+  <FILE Name="/usr/local/emhttp/plugins/&slug;/&slug;.page" Mode="0644">&rawURL;/web/&slug;.page</FILE>
+
+  <SCRIPT>
+<![CDATA[
+# Ensure persistent config directory exists
+mkdir -p /boot/config/plugins/&slug;
+# Start service (will create a default config with ENABLED="no" if missing)
+/etc/rc.d/rc.&slug; start
+]]>
+  </SCRIPT>
+
+  <SCRIPT Run="/bin/bash" Method="remove">
+<![CDATA[
+/etc/rc.d/rc.&slug; stop || true
+rm -f /usr/local/sbin/&slug;
+rm -f /etc/rc.d/rc.&slug;
+rm -rf /usr/local/emhttp/plugins/&slug;
+]]>
+  </SCRIPT>
+
+</PLUGIN>
