@@ -5,14 +5,7 @@ on:
     tags:
       - 'v*'
       - 'V*'
-  release:
-    types: [published]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to upload assets to (e.g. v0.1.0 or V0.1.0)'
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -21,37 +14,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.22'
           cache: false
-
-      - name: Test
-        run: go test ./...
-
-      - name: Build linux amd64 binary
+      - name: Build linux amd64
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -trimpath -ldflags "-s -w" -o libwake-linux-amd64 ./cmd/libwake
-
-      - name: Determine tag
-        id: tag
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish GitHub Release asset
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/libwake-linux-amd64 ./cmd/libwake
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          files: libwake-linux-amd64
+          tag_name: ${{ github.ref_name }}
+          files: dist/libwake-linux-amd64
