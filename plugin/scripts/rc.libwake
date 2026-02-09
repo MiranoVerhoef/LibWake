@@ -7,6 +7,33 @@ CFG="/boot/config/plugins/${NAME}/${NAME}.cfg"
 PID="/var/run/${NAME}.pid"
 LOGDIR="/var/log/${NAME}"
 LOGFILE="${LOGDIR}/${NAME}.log"
+HOOK_PAGES=(
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMSettings.page"
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMManager.page"
+)
+HOOK_TAG="# libwake vmsettings hook"
+HOOK_LINE="<?php if (is_file('/usr/local/emhttp/plugins/libwake/include/libwake_vmsettings.php')) include_once('/usr/local/emhttp/plugins/libwake/include/libwake_vmsettings.php'); ?>"
+
+ensure_vmsettings_hook() {
+  for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
+    if [[ -f "${HOOK_PAGE}" ]]; then
+      if ! grep -q "libwake_vmsettings.php" "${HOOK_PAGE}" 2>/dev/null; then
+        echo "${HOOK_TAG}" >> "${HOOK_PAGE}"
+        echo "${HOOK_LINE}" >> "${HOOK_PAGE}"
+      fi
+    fi
+  done
+}
+
+remove_vmsettings_hook() {
+  for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
+    if [[ -f "${HOOK_PAGE}" ]]; then
+      sed -i -e "/libwake vmsettings hook/d" -e "/libwake_vmsettings\.php/d" "${HOOK_PAGE}" 2>/dev/null || true
+    fi
+  done
+}
+
+
 
 ensure_cfg() {
   if [[ ! -f "${CFG}" ]]; then
@@ -34,6 +61,7 @@ is_enabled() {
 start() {
   mkdir -p "${LOGDIR}"
   ensure_cfg
+  ensure_vmsettings_hook
 
   if ! is_enabled; then
     echo "${NAME}: disabled (ENABLED=no)"
@@ -82,7 +110,7 @@ status() {
       echo "${NAME}: disabled"
       exit 0
     fi
-  fi
+  done
 }
 
 case "${1:-}" in

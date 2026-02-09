@@ -3,7 +3,7 @@
   <!ENTITY slug "libwake">
   <!ENTITY name "LibWake">
   <!ENTITY author "Verhoef">
-  <!ENTITY version "0.1.3">
+  <!ENTITY version "0.1.4">
   <!ENTITY github "MiranoVerhoef/LibWake">
   <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
   <!ENTITY rawURL "https://raw.githubusercontent.com/&github;/main/plugin">
@@ -13,17 +13,335 @@
 
   <CHANGES>
 <![CDATA[
-### 0.1.3
-- Fix: plugin install no longer fails when the release binary is missing
-- Fix: service only starts when ENABLED="yes"
-- CI: add go.sum (empty) to avoid Go cache warnings
+### 0.1.4
+- Fix: plugin install no longer fails creating /etc/rc.d/rc.libwake (embedded files; no raw downloads)
+- UI: LibWake settings are injected into **Settings → VM Manager** as a new section (like "Libvirt volume info")
+- Boot: start/stop hooks via Dynamix event scripts (array started/stopping)
+- CI: keep go.sum present to avoid Go cache warnings
+
 ]]>
   </CHANGES>
+  <FILE Name="/etc/rc.d/rc.&slug;" Mode="0755">
+<![CDATA[
+#!/bin/bash
+set -euo pipefail
 
-  <FILE Name="/etc/rc.d/rc.&slug;" Mode="0755">&rawURL;/scripts/rc.&slug;</FILE>
-  <FILE Name="/usr/local/emhttp/plugins/&slug;/LibWake.page" Mode="0644">&rawURL;/web/LibWake.page</FILE>
+NAME="libwake"
+BIN="/usr/local/sbin/libwake"
+CFG="/boot/config/plugins/${NAME}/${NAME}.cfg"
+PID="/var/run/${NAME}.pid"
+LOGDIR="/var/log/${NAME}"
+LOGFILE="${LOGDIR}/${NAME}.log"
+HOOK_PAGES=(
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMSettings.page"
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMManager.page"
+)
+HOOK_TAG="# libwake vmsettings hook"
+HOOK_LINE="<?php if (is_file('/usr/local/emhttp/plugins/libwake/include/libwake_vmsettings.php')) include_once('/usr/local/emhttp/plugins/libwake/include/libwake_vmsettings.php'); ?>"
 
-  <SCRIPT>
+ensure_vmsettings_hook() {
+  for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
+    if [[ -f "${HOOK_PAGE}" ]]; then
+      if ! grep -q "libwake_vmsettings.php" "${HOOK_PAGE}" 2>/dev/null; then
+        echo "${HOOK_TAG}" >> "${HOOK_PAGE}"
+        echo "${HOOK_LINE}" >> "${HOOK_PAGE}"
+      fi
+    fi
+  done
+}
+
+remove_vmsettings_hook() {
+  for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
+    if [[ -f "${HOOK_PAGE}" ]]; then
+      sed -i -e "/libwake vmsettings hook/d" -e "/libwake_vmsettings\.php/d" "${HOOK_PAGE}" 2>/dev/null || true
+    fi
+  done
+}
+
+
+
+ensure_cfg() {
+  if [[ ! -f "${CFG}" ]]; then
+    mkdir -p "$(dirname "${CFG}")"
+    cat > "${CFG}" <<'CFGEOF'
+# libwake settings
+# Set ENABLED="yes" to start responding to WOL packets.
+ENABLED="no"
+INTERFACE="br0"
+UDP_PORTS="7,9"
+# Optional: comma-separated CIDRs
+# ALLOW_SUBNETS="192.168.1.0/24,10.0.0.0/8"
+DEBOUNCE_SECONDS="10"
+CFGEOF
+  fi
+}
+
+is_enabled() {
+  ensure_cfg
+  # shellcheck disable=SC1090
+  source "${CFG}" >/dev/null 2>&1 || true
+  [[ "${ENABLED:-no}" == "yes" ]]
+}
+
+start() {
+  mkdir -p "${LOGDIR}"
+  ensure_cfg
+  ensure_vmsettings_hook
+
+  if ! is_enabled; then
+    echo "${NAME}: disabled (ENABLED=no)"
+    exit 0
+  fi
+
+  if [[ ! -x "${BIN}" ]]; then
+    echo "${NAME}: binary not found at ${BIN}" >&2
+    exit 1
+  fi
+
+  if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}")" 2>/dev/null; then
+    echo "${NAME}: already running (pid $(cat "${PID}"))"
+    exit 0
+  fi
+
+  echo "${NAME}: starting"
+  (nohup "${BIN}" -config "${CFG}" >>"${LOGFILE}" 2>&1 & echo $! >"${PID}")
+}
+
+stop() {
+  if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}")" 2>/dev/null; then
+    echo "${NAME}: stopping"
+    kill "$(cat "${PID}")" || true
+    for _ in {1..20}; do
+      if ! kill -0 "$(cat "${PID}")" 2>/dev/null; then
+        break
+      fi
+      sleep 0.2
+    done
+    rm -f "${PID}"
+  else
+    echo "${NAME}: not running"
+    rm -f "${PID}" 2>/dev/null || true
+  fi
+}
+
+status() {
+  if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}")" 2>/dev/null; then
+    echo "${NAME}: running (pid $(cat "${PID}"))"
+  else
+    if is_enabled; then
+      echo "${NAME}: enabled but not running" >&2
+      exit 1
+    else
+      echo "${NAME}: disabled"
+      exit 0
+    fi
+  done
+}
+
+case "${1:-}" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart)
+    stop
+    start
+    ;;
+  status)
+    status
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}" >&2
+    exit 2
+    ;;
+
+esac
+]]>
+  </FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/&slug;/include/libwake_vmsettings.php" Mode="0644">
+<![CDATA[
+<?php
+// Simple settings page (works without extra includes). This is intentionally
+// minimal for a first public version.
+
+$plugin = 'libwake';
+$cfgFile = "/boot/config/plugins/${plugin}/${plugin}.cfg";
+$vmFile  = "/boot/config/plugins/${plugin}/vms.json";
+$rcScript = "/etc/rc.d/rc.${plugin}";
+
+function read_cfg($path) {
+  $out = [];
+  if (!is_file($path)) return $out;
+  $lines = file($path, FILE_IGNORE_NEW_LINES);
+  foreach ($lines as $line) {
+    $line = trim($line);
+    if ($line === '' || str_starts_with($line, '#') || str_starts_with($line, ';')) continue;
+    $pos = strpos($line, '=');
+    if ($pos === false) continue;
+    $key = trim(substr($line, 0, $pos));
+    $val = trim(substr($line, $pos+1));
+    $val = trim($val, "\"'");
+    $out[$key] = $val;
+  }
+  return $out;
+}
+
+function write_cfg($path, $kv) {
+  $dir = dirname($path);
+  if (!is_dir($dir)) mkdir($dir, 0775, true);
+  $lines = [];
+  $lines[] = '# libwake settings';
+  $lines[] = 'ENABLED="'.($kv['ENABLED'] ?? 'no').'"';
+  $lines[] = 'INTERFACE="'.($kv['INTERFACE'] ?? 'br0').'"';
+  $lines[] = 'UDP_PORTS="'.($kv['UDP_PORTS'] ?? '7,9').'"';
+  if (!empty($kv['ALLOW_SUBNETS'])) {
+    $lines[] = 'ALLOW_SUBNETS="'.$kv['ALLOW_SUBNETS'].'"';
+  } else {
+    $lines[] = '# ALLOW_SUBNETS="192.168.1.0/24,10.0.0.0/8"';
+  }
+  $lines[] = 'DEBOUNCE_SECONDS="'.($kv['DEBOUNCE_SECONDS'] ?? '10').'"';
+  $lines[] = 'VM_STATE_PATH="'.$kv['VM_STATE_PATH'].'"';
+  file_put_contents($path, implode("\n", $lines)."\n");
+}
+
+function read_vmstate($path) {
+  if (!is_file($path)) return [];
+  $raw = file_get_contents($path);
+  $j = json_decode($raw, true);
+  if (!is_array($j)) return [];
+  return $j;
+}
+
+function write_vmstate($path, $state) {
+  $dir = dirname($path);
+  if (!is_dir($dir)) mkdir($dir, 0775, true);
+  file_put_contents($path, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n");
+}
+
+function list_vms() {
+  $names = trim(shell_exec('virsh list --all --name 2>/dev/null'));
+  if ($names === '') return [];
+  $rows = [];
+  foreach (preg_split('/\R/', $names) as $name) {
+    $name = trim($name);
+    if ($name === '') continue;
+    $uuid = trim(shell_exec('virsh domuuid '.escapeshellarg($name).' 2>/dev/null'));
+    if ($uuid === '') continue;
+    $rows[] = ['name'=>$name, 'uuid'=>$uuid];
+  }
+  usort($rows, fn($a,$b)=>strcmp($a['name'],$b['name']));
+  return $rows;
+}
+
+$cfg = read_cfg($cfgFile);
+if (empty($cfg['VM_STATE_PATH'])) $cfg['VM_STATE_PATH'] = $vmFile;
+$vmState = read_vmstate($cfg['VM_STATE_PATH']);
+
+$didSave = false;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
+  $cfg['ENABLED'] = isset($_POST['enabled']) ? 'yes' : 'no';
+  $cfg['INTERFACE'] = trim($_POST['interface'] ?? 'br0');
+  $cfg['UDP_PORTS'] = trim($_POST['udp_ports'] ?? '7,9');
+  $cfg['ALLOW_SUBNETS'] = trim($_POST['allow_subnets'] ?? '');
+  $cfg['DEBOUNCE_SECONDS'] = trim($_POST['debounce_seconds'] ?? '10');
+  $cfg['VM_STATE_PATH'] = $vmFile;
+
+  // VM checkboxes
+  $newState = [];
+  foreach (list_vms() as $vm) {
+    $key = 'vm_'.str_replace('-', '_', $vm['uuid']);
+    $newState[$vm['uuid']] = isset($_POST[$key]);
+  }
+
+  write_cfg($cfgFile, $cfg);
+  write_vmstate($vmFile, $newState);
+
+  // Restart daemon
+  if (is_file($rcScript)) {
+    shell_exec(escapeshellcmd($rcScript).' restart >/dev/null 2>&1');
+  }
+  $vmState = $newState;
+  $didSave = true;
+}
+
+$vms = list_vms();
+?>
+
+<div class="title">
+  <span>LibWake</span>
+</div>
+
+<?php if ($didSave): ?>
+  <div class="notice">Settings saved. Daemon restarted.</div>
+<?php endif; ?>
+
+<form method="POST">
+  <input type="hidden" name="action" value="save" />
+
+  <table class="settings">
+    <tr>
+      <td>Enable daemon</td>
+      <td><input type="checkbox" name="enabled" <?=($cfg['ENABLED'] ?? 'no')==='yes'?'checked':''?> /></td>
+    </tr>
+    <tr>
+      <td>Listen interface</td>
+      <td><input type="text" name="interface" value="<?=htmlspecialchars($cfg['INTERFACE'] ?? 'br0')?>" /></td>
+    </tr>
+    <tr>
+      <td>UDP ports</td>
+      <td><input type="text" name="udp_ports" value="<?=htmlspecialchars($cfg['UDP_PORTS'] ?? '7,9')?>" /></td>
+    </tr>
+    <tr>
+      <td>Allow subnets (optional)</td>
+      <td><input style="width: 420px" type="text" name="allow_subnets" value="<?=htmlspecialchars($cfg['ALLOW_SUBNETS'] ?? '')?>" placeholder="192.168.1.0/24,10.0.0.0/8" /></td>
+    </tr>
+    <tr>
+      <td>Debounce seconds</td>
+      <td><input type="number" name="debounce_seconds" value="<?=htmlspecialchars($cfg['DEBOUNCE_SECONDS'] ?? '10')?>" min="0" max="300" /></td>
+    </tr>
+  </table>
+
+  <h3>VMs</h3>
+  <p>Select which VMs may be started by WOL packets.</p>
+  <table class="settings">
+    <tr><th>Enable</th><th>Name</th><th>UUID</th></tr>
+    <?php foreach ($vms as $vm):
+      $key = 'vm_'.str_replace('-', '_', $vm['uuid']);
+      $checked = !empty($vmState[$vm['uuid']]);
+    ?>
+      <tr>
+        <td><input type="checkbox" name="<?=$key?>" <?= $checked ? 'checked' : '' ?> /></td>
+        <td><?=htmlspecialchars($vm['name'])?></td>
+        <td><code><?=htmlspecialchars($vm['uuid'])?></code></td>
+      </tr>
+    <?php endforeach; ?>
+  </table>
+
+  <p>
+    <button type="submit" class="button">Apply</button>
+  </p>
+</form>
+]]>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&slug;/event/started" Mode="0755">
+<![CDATA[
+#!/bin/bash
+/etc/rc.d/rc.libwake start
+]]>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&slug;/event/stopping" Mode="0755">
+<![CDATA[
+#!/bin/bash
+/etc/rc.d/rc.libwake stop
+]]>
+  </FILE>
+
+<SCRIPT>
 <![CDATA[
 set -u
 
@@ -78,7 +396,20 @@ DEBOUNCE_SECONDS="10"
 CFGEOF
 fi
 
+# Inject LibWake section into VM Manager settings page (so you can configure it immediately)
+HOOK_PAGES=(
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMSettings.page"
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMManager.page"
+)
+for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
+  if [[ -f "$HOOK_PAGE" ]] && ! grep -q "libwake_vmsettings.php" "$HOOK_PAGE" 2>/dev/null; then
+    echo "# libwake vmsettings hook" >> "$HOOK_PAGE"
+    echo "<?php if (is_file('/usr/local/emhttp/plugins/libwake/include/libwake_vmsettings.php')) include_once('/usr/local/emhttp/plugins/libwake/include/libwake_vmsettings.php'); ?>" >> "$HOOK_PAGE"
+  fi
+done
+
 # Do not auto-start on install. Enable it in Settings → VM Manager → LibWake.
+. Enable it in Settings → VM Manager → LibWake.
 ]]>
   </SCRIPT>
 
@@ -88,6 +419,16 @@ fi
 rm -f /usr/local/sbin/&slug;
 rm -f /etc/rc.d/rc.&slug;
 rm -rf /usr/local/emhttp/plugins/&slug;
+# Remove VM Manager page hook (if present)
+HOOK_PAGES=(
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMSettings.page"
+  "/usr/local/emhttp/plugins/dynamix.vm.manager/VMManager.page"
+)
+for HOOK_PAGE in "${HOOK_PAGES[@]}"; do
+  if [[ -f "$HOOK_PAGE" ]]; then
+    sed -i -e "/libwake vmsettings hook/d" -e "/libwake_vmsettings\.php/d" "$HOOK_PAGE" 2>/dev/null || true
+  fi
+done
 ]]>
   </SCRIPT>
 

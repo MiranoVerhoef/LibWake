@@ -32,7 +32,9 @@ https://github.com/MiranoVerhoef/LibWake/releases
 
 ## Configure
 
-Unraid WebGUI → **Settings** (overview) → under **VM Manager** click **LibWake**
+Unraid WebGUI → **Settings** → **VM Manager**
+
+Scroll down to the **LibWake** section (next to other VM Manager sections like "Libvirt volume info").
 
 - **Enable daemon**
 - Set **Listen interface** (usually `br0`)
