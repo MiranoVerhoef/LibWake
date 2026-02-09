@@ -3,25 +3,30 @@
   <!ENTITY slug "libwake">
   <!ENTITY name "LibWake">
   <!ENTITY author "Verhoef">
-  <!ENTITY version "0.1.0">
+  <!ENTITY version "0.1.2">
   <!ENTITY github "MiranoVerhoef/LibWake">
   <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
   <!ENTITY rawURL "https://raw.githubusercontent.com/&github;/main/plugin">
-  <!ENTITY binURL "https://github.com/&github;/releases/download/v&version;/&slug;-linux-amd64">
+  <!ENTITY binURL "https://github.com/&github;/releases/download/v0.1.2/&slug;-linux-amd64">
 ]>
 
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plgURL;" min="7.0.0">
+<PLUGIN name="&name;" author="&author;" version="0.1.2" pluginURL="&plgURL;" min="7.0.0">
 
   <CHANGES>
 <![CDATA[
-### &version;
-- Initial public release (Go daemon + basic settings page)
+### 0.1.1
+- Fix: Settings page file name casing (ensures LibWake icon/page shows in Unraid)
+- Docs: clarify where to find LibWake in Settings
+
+### 0.1.2
+- Fix: build failure in EtherType listener (sockaddr to net.Addr conversion)
+- CI: disable Go cache step that requires go.sum
 ]]>
   </CHANGES>
 
   <FILE Name="/usr/local/sbin/&slug;" Mode="0755">&binURL;</FILE>
   <FILE Name="/etc/rc.d/rc.&slug;" Mode="0755">&rawURL;/scripts/rc.&slug;</FILE>
-  <FILE Name="/usr/local/emhttp/plugins/&slug;/&slug;.page" Mode="0644">&rawURL;/web/&slug;.page</FILE>
+  <FILE Name="/usr/local/emhttp/plugins/&slug;/LibWake.page" Mode="0644">&rawURL;/web/LibWake.page</FILE>
 
   <SCRIPT>
 <![CDATA[
