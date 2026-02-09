@@ -1,0 +1,6 @@
+LibWake (ultimate) combines ideas from:
+- unRAID-libvirtwol (GPLv2) by dmacias72 and contributors: VM Manager UI injection approach via Dynamix VMSettings.page.
+- virtwold (BSD 2-Clause) by ScottESanDiego: WOL magic packet validation approach and general daemon structure concepts.
+
+This repository is distributed under GPLv2 (see COPYING).
+For BSD-2 components/ideas, see LICENSES/virtwold-BSD-2-Clause.txt.

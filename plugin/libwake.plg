@@ -1,195 +1,65 @@
-<?xml version="1.0"?>
+<?xml version='1.0' standalone='yes'?>
 <!DOCTYPE PLUGIN [
-  <!ENTITY slug "libwake">
-  <!ENTITY name "LibWake">
-  <!ENTITY author "Verhoef">
-  <!ENTITY version "0.2.1">
-  <!ENTITY github "MiranoVerhoef/LibWake">
-  <!ENTITY plgURL "https://raw.githubusercontent.com/&github;/main/plugin/&slug;.plg">
+<!ENTITY name      "libwake">
+<!ENTITY author    "Verhoef">
+<!ENTITY version   "0.3.0">
+<!ENTITY github    "MiranoVerhoef/LibWake">
+<!ENTITY gitURL    "https://raw.githubusercontent.com/&github;/main">
+<!ENTITY pluginURL "&gitURL;/plugin/&name;.plg">
+<!ENTITY pkgURL    "&gitURL;/archive">
+<!ENTITY plgPATH   "/boot/config/plugins/&name;">
+<!ENTITY plgNAME   "&name;-&version;-x86_64-1">
 ]>
 
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&plgURL;" min="7.0.0" launch="/Settings/LibWake">
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" launch="Settings/VMManager">
 
-  <CHANGES>
+<CHANGES>
 <![CDATA[
-### 0.2.1
-- UI: LibWake appears under **Settings → User Utilities** (Menu="Utilities") and the plugin entry opens the same page.
-- UI: Added LibWake logo/icon.
-- Install: Uses install-time file creation (no <FILE> entries) to avoid chmod failures.
+### 0.3.0 (ultimate)
+- VM Manager integration: per‑VM WOL enable/disable in Settings → VM Manager (libvirtwol-style injection).
+- Listener: UDP (7/9) + raw ethernet WOL frames (ethertype 0x0842) without libpcap.
+- Daemon: starts matching VM via `virsh start` when enabled for that VM.
+- UI: User Utilities page for daemon settings.
 ]]>
-  </CHANGES>
+</CHANGES>
 
-  <INSTALL>
+<FILE Name="&plgPATH;/&plgNAME;.txz" Run="upgradepkg --install-new">
+  <URL>&pkgURL;/&plgNAME;.txz</URL>
+  <MD5>bb2b0add4a21829fdc97146d7690db12</MD5>
+</FILE>
+
+<INSTALL>
 <![CDATA[
-#!/bin/bash
-set -u
-
-SLUG="libwake"
-echo "Installing ${SLUG}..."
-
-# Create plugin directories (keep going even if something already exists)
-mkdir -p /usr/local/emhttp/plugins/${SLUG} || true
-mkdir -p /usr/local/emhttp/plugins/${SLUG}/{scripts,include,images,web,event} || true
-mkdir -p /boot/config/plugins/${SLUG} || true
-
-# Icon: persist on flash; copy to runtime
-ICON_FLASH="/boot/config/plugins/${SLUG}/${SLUG}.png"
-ICON_RUN="/usr/local/emhttp/plugins/${SLUG}/images/${SLUG}.png"
-if [[ ! -f "${ICON_FLASH}" ]]; then
-  ICON_URL="https://raw.githubusercontent.com/MiranoVerhoef/LibWake/main/plugin/${SLUG}.png"
-  wget -qO "${ICON_FLASH}" "${ICON_URL}" || true
-fi
-if [[ -f "${ICON_FLASH}" ]]; then
-  cp -f "${ICON_FLASH}" "${ICON_RUN}" || true
-  chmod 0644 "${ICON_RUN}" || true
-fi
-
-# Binary: try to fetch from release tag (non-fatal if missing)
-BIN_URL="https://github.com/MiranoVerhoef/LibWake/releases/download/v0.2.1/libwake-linux-amd64"
-if wget -qO /usr/local/sbin/libwake "${BIN_URL}"; then
-  chmod 0755 /usr/local/sbin/libwake || true
-else
-  echo "Note: binary not downloaded (release asset missing)."
-  rm -f /usr/local/sbin/libwake || true
-fi
-
-# rc script
-cat > /etc/rc.d/rc.${SLUG} <<'EOF'
 #!/bin/bash
 set -e
+SLUG="libwake"
+mkdir -p /boot/config/plugins/${SLUG}
 
-NAME="libwake"
-BIN="/usr/local/sbin/libwake"
-CFG="/boot/config/plugins/${NAME}/${NAME}.cfg"
-PID="/var/run/${NAME}.pid"
-LOGDIR="/var/log/${NAME}"
-LOGFILE="${LOGDIR}/${NAME}.log"
-
-load_cfg() {
-  if [[ -f "${CFG}" ]]; then
-    # shellcheck disable=SC1090
-    source "${CFG}"
-  fi
-  ENABLED="${ENABLED:-no}"
-  IFACE="${IFACE:-br0}"
-  UDP_PORTS="${UDP_PORTS:-9}"
-  ALLOW_SUBNETS="${ALLOW_SUBNETS:-}"
-}
-
-start_daemon() {
-  load_cfg
-  [[ "${ENABLED}" == "yes" ]] || { echo "${NAME}: disabled"; return 0; }
-  [[ -x "${BIN}" ]] || { echo "${NAME}: binary missing at ${BIN}"; return 1; }
-  mkdir -p "${LOGDIR}"
-  nohup "${BIN}" --iface "${IFACE}" --udp-ports "${UDP_PORTS}" ${ALLOW_SUBNETS:+--allow-subnets "${ALLOW_SUBNETS}"} >> "${LOGFILE}" 2>&1 &
-  echo $! > "${PID}"
-}
-
-stop_daemon() {
-  if [[ -f "${PID}" ]]; then
-    pid="$(cat "${PID}" || true)"
-    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then kill "${pid}" || true; fi
-    rm -f "${PID}"
-  fi
-}
-
-case "${1:-}" in
-  start) start_daemon ;;
-  stop) stop_daemon ;;
-  restart) stop_daemon; sleep 1; start_daemon ;;
-  status)
-    if [[ -f "${PID}" ]] && kill -0 "$(cat "${PID}" 2>/dev/null)" 2>/dev/null; then
-      echo "${NAME}: running"
-      exit 0
-    fi
-    echo "${NAME}: not running"
-    exit 3
-    ;;
-  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
-esac
+# default daemon config
+CFG="/boot/config/plugins/${SLUG}/${SLUG}.cfg"
+if [[ ! -f "${CFG}" ]]; then
+  cat > "${CFG}" <<'EOF'
+ENABLED="no"
+IFACE="br0"
+UDP_PORTS="7,9"
+ALLOW_SUBNETS=""
 EOF
-chmod 0755 /etc/rc.d/rc.${SLUG} || true
-cp -f /etc/rc.d/rc.${SLUG} /usr/local/emhttp/plugins/${SLUG}/scripts/rc.${SLUG} || true
-chmod 0755 /usr/local/emhttp/plugins/${SLUG}/scripts/rc.${SLUG} || true
+fi
 
-# Settings page (Utilities)
-cat > /usr/local/emhttp/plugins/${SLUG}/LibWake.page <<'EOF'
-Menu="Utilities"
-Title="LibWake"
-Icon="libwake.png"
-Tag="bolt"
----
-<?php
-$docroot = $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
-require_once "$docroot/webGui/include/Helpers.php";
-$cfg = "/boot/config/plugins/libwake/libwake.cfg";
+# per-VM enable list
+VMFILE="/boot/config/plugins/${SLUG}/vms.cfg"
+touch "${VMFILE}" 2>/dev/null || true
 
-function read_cfg($cfg) {
-  $out = ["ENABLED"=>"no","IFACE"=>"br0","UDP_PORTS"=>"9","ALLOW_SUBNETS"=>""];
-  if (is_file($cfg)) foreach (file($cfg, FILE_IGNORE_NEW_LINES) as $l) if (preg_match('/^\s*([A-Z0-9_]+)\s*=\s*"(.*)"\s*$/', $l, $m)) $out[$m[1]] = stripcslashes($m[2]);
-  return $out;
-}
-function write_cfg($cfg, $data) {
-  $c = "";
-  foreach ($data as $k=>$v) {
-    $v = str_replace(["\\","\"], ["\\\\","\\\""], $v);
-    $v = str_replace("\"","\\\"", $v);
-    $c .= $k.'="'.$v."\"\n";
-  }
-  file_put_contents($cfg, $c);
-}
-$cfgdata = read_cfg($cfg);
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-  $cfgdata["ENABLED"] = isset($_POST["ENABLED"]) ? "yes" : "no";
-  $cfgdata["IFACE"] = preg_replace('/[^a-zA-Z0-9_.:-]/', '', $_POST["IFACE"] ?? "br0");
-  $cfgdata["UDP_PORTS"] = preg_replace('/[^0-9,]/', '', $_POST["UDP_PORTS"] ?? "9");
-  $cfgdata["ALLOW_SUBNETS"] = trim($_POST["ALLOW_SUBNETS"] ?? "");
-  write_cfg($cfg, $cfgdata);
-  exec("/etc/rc.d/rc.libwake restart >/dev/null 2>&1 &");
-  $cfgdata = read_cfg($cfg);
-}
-?>
-<div class="title">LibWake</div>
-<div class="notice">Listen for Wake-on-LAN packets and start matching VMs.</div>
-<form method="POST">
-  <table class="settings">
-    <tr><td>Enable</td><td><input type="checkbox" name="ENABLED" <?= $cfgdata["ENABLED"]==="yes"?"checked":"" ?> /></td></tr>
-    <tr><td>Interface</td><td><input type="text" name="IFACE" value="<?= htmlspecialchars($cfgdata["IFACE"]) ?>" /></td></tr>
-    <tr><td>UDP Ports</td><td><input type="text" name="UDP_PORTS" value="<?= htmlspecialchars($cfgdata["UDP_PORTS"]) ?>" /> <span class="hint">(e.g. 7,9)</span></td></tr>
-    <tr><td>Allow subnets</td><td><input type="text" name="ALLOW_SUBNETS" value="<?= htmlspecialchars($cfgdata["ALLOW_SUBNETS"]) ?>" /> <span class="hint">(optional)</span></td></tr>
-  </table>
-  <p><input type="submit" value="Apply" class="button" /></p>
-</form>
-EOF
-chmod 0644 /usr/local/emhttp/plugins/${SLUG}/LibWake.page || true
+# install rc script
+install -m 0755 -D /etc/rc.d/rc.${SLUG} /etc/rc.d/rc.${SLUG} 2>/dev/null || true
 
-# Also provide the standard plugin page entry
-cp -f /usr/local/emhttp/plugins/${SLUG}/LibWake.page /usr/local/emhttp/plugins/${SLUG}/${SLUG}.page || true
-chmod 0644 /usr/local/emhttp/plugins/${SLUG}/${SLUG}.page || true
+# try to fetch daemon binary from release asset (non-fatal)
+BIN_URL="https://github.com/MiranoVerhoef/LibWake/releases/download/v0.3.0/libwake-linux-amd64"
+wget -qO /usr/local/sbin/libwake "${BIN_URL}" && chmod 0755 /usr/local/sbin/libwake || true
 
-# Placeholder include for future VM settings integration
-echo "<?php // future hooks ?>" > /usr/local/emhttp/plugins/${SLUG}/include/libwake_vmsettings.php || true
-chmod 0644 /usr/local/emhttp/plugins/${SLUG}/include/libwake_vmsettings.php || true
-
-# Event hooks
-cat > /usr/local/emhttp/plugins/${SLUG}/event/started <<'EOF'
-#!/bin/bash
-/etc/rc.d/rc.libwake start >/dev/null 2>&1 || true
-EOF
-chmod 0755 /usr/local/emhttp/plugins/${SLUG}/event/started || true
-
-cat > /usr/local/emhttp/plugins/${SLUG}/event/stopping <<'EOF'
-#!/bin/bash
-/etc/rc.d/rc.libwake stop >/dev/null 2>&1 || true
-EOF
-chmod 0755 /usr/local/emhttp/plugins/${SLUG}/event/stopping || true
-
-echo "LibWake installed. If it doesn't show immediately, restart WebGUI (Settings → Management Access → Restart WebGUI)."
-echo "Installed files:"
-ls -la /usr/local/emhttp/plugins/${SLUG} || true
+echo "LibWake installed. If you don't see the VM Manager section yet, restart WebGUI: Settings → Management Access → Restart WebGUI"
 ]]>
-  </INSTALL>
-
+</INSTALL>
 
 <REMOVE>
 <![CDATA[
@@ -197,11 +67,10 @@ ls -la /usr/local/emhttp/plugins/${SLUG} || true
 set -e
 SLUG="libwake"
 /etc/rc.d/rc.${SLUG} stop >/dev/null 2>&1 || true
-rm -f /etc/rc.d/rc.${SLUG}
 rm -f /usr/local/sbin/libwake
 rm -rf /usr/local/emhttp/plugins/${SLUG}
-echo "LibWake removed."
+# leave /boot/config/plugins/libwake for user settings
 ]]>
-  </REMOVE>
+</REMOVE>
 
 </PLUGIN>

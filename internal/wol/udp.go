@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 )
@@ -15,29 +16,24 @@ type Event struct {
 }
 
 func normalizeMAC(mac string) string {
-	mac = strings.ToLower(mac)
+	mac = strings.ToLower(strings.TrimSpace(mac))
 	mac = strings.ReplaceAll(mac, "-", ":")
-	mac = strings.ReplaceAll(mac, ".", "")
-	if strings.Contains(mac, ":") {
-		parts := strings.Split(mac, ":")
-		if len(parts) == 6 {
-			for i := range parts {
-				if len(parts[i]) == 1 {
-					parts[i] = "0" + parts[i]
-				}
-			}
-			return strings.Join(parts, ":")
-		}
-	}
-	// fallback if it's 12 hex chars
+	// handle 12 hex chars
+	mac = strings.ReplaceAll(mac, ":", "")
 	if len(mac) == 12 {
 		return mac[0:2] + ":" + mac[2:4] + ":" + mac[4:6] + ":" + mac[6:8] + ":" + mac[8:10] + ":" + mac[10:12]
 	}
-	return mac
+	// if already has colons, re-add with normalization
+	mac = strings.ReplaceAll(mac, ":", "")
+	if len(mac) == 12 {
+		return mac[0:2] + ":" + mac[2:4] + ":" + mac[4:6] + ":" + mac[6:8] + ":" + mac[8:10] + ":" + mac[10:12]
+	}
+	return strings.ToLower(strings.TrimSpace(mac))
 }
 
+// ParseMagicPacket validates and extracts the MAC address from a WOL magic packet.
+// Magic packet: 6x 0xFF then 16 repetitions of target MAC (6 bytes) = 102 bytes minimum.
 func ParseMagicPacket(b []byte) (string, bool) {
-	// Magic packet: 6x 0xFF then 16 repetitions of target MAC (6 bytes) = 6 + 16*6 = 102 bytes minimum
 	if len(b) < 102 {
 		return "", false
 	}
@@ -59,20 +55,20 @@ func ParseMagicPacket(b []byte) (string, bool) {
 			}
 		}
 	}
-	return normalizeMAC(hex.EncodeToString(mac)[0:2]+":"+hex.EncodeToString(mac)[2:4]+":"+hex.EncodeToString(mac)[4:6]+":"+hex.EncodeToString(mac)[6:8]+":"+hex.EncodeToString(mac)[8:10]+":"+hex.EncodeToString(mac)[10:12]), true
+	h := hex.EncodeToString(mac)
+	return normalizeMAC(h), true
 }
 
+// ListenUDP listens on the given UDP ports and calls onEvent for valid WOL packets.
 func ListenUDP(ports []int, onEvent func(Event), logger *log.Logger) error {
 	if logger == nil {
 		logger = log.Default()
 	}
 	conns := []*net.UDPConn{}
-
 	for _, port := range ports {
 		addr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
 		c, err := net.ListenUDP("udp4", addr)
 		if err != nil {
-			// cleanup
 			for _, cc := range conns {
 				_ = cc.Close()
 			}
@@ -86,7 +82,7 @@ func ListenUDP(ports []int, onEvent func(Event), logger *log.Logger) error {
 	for _, c := range conns {
 		conn := c
 		go func() {
-			buf := make([]byte, 1500)
+			buf := make([]byte, 2048)
 			for {
 				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 				n, src, err := conn.ReadFromUDP(buf)
@@ -106,8 +102,7 @@ func ListenUDP(ports []int, onEvent func(Event), logger *log.Logger) error {
 			}
 		}()
 	}
-
-	select {} // run forever
+	return nil
 }
 
 func ParseCIDRs(s string) ([]*net.IPNet, error) {
@@ -144,4 +139,34 @@ func SourceAllowed(nets []*net.IPNet, ipStr string) bool {
 		}
 	}
 	return false
+}
+
+// LoadEnabledMACs reads a simple INI-like file where each line is: aa:bb:cc:dd:ee:ff=yes
+// Returns a set of enabled MACs.
+func LoadEnabledMACs(path string) map[string]bool {
+	out := map[string]bool{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	lines := strings.Split(string(b), "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
+			continue
+		}
+		parts := strings.SplitN(l, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		mac := normalizeMAC(parts[0])
+		val := strings.ToLower(strings.TrimSpace(parts[1]))
+		if mac == "" {
+			continue
+		}
+		if val == "yes" || val == "true" || val == "1" || val == "on" {
+			out[mac] = true
+		}
+	}
+	return out
 }
